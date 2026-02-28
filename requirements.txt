@@ -1,0 +1,25 @@
+# For Web API & Server
+fastapi
+uvicorn
+pydantic
+pydantic-settings
+python-dotenv
+
+# For Advanced Scraping (Free/Open Source)
+playwright
+selectolax
+beautifulsoup4
+
+# For AI & Agentic Orchestration
+langchain
+langchain-openai
+openai
+
+# For Data Processing & Database
+pandas
+duckdb
+loguru
+
+# For Evaluation (The Engine Check)
+ragas
+deepeval

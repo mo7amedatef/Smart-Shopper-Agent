@@ -1,0 +1,24 @@
+[project]
+name = "smart-shopper-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "beautifulsoup4>=4.14.3",
+    "deepeval>=3.8.8",
+    "duckdb>=1.4.4",
+    "fastapi>=0.134.0",
+    "langchain>=1.2.10",
+    "langchain-openai>=1.1.10",
+    "loguru>=0.7.3",
+    "openai>=2.24.0",
+    "pandas>=3.0.1",
+    "playwright>=1.58.0",
+    "pydantic>=2.12.5",
+    "pydantic-settings>=2.13.1",
+    "python-dotenv>=1.2.1",
+    "ragas>=0.4.3",
+    "selectolax>=0.4.6",
+    "uvicorn>=0.41.0",
+]
