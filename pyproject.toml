@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "aiosqlite>=0.22.1",
     "beautifulsoup4>=4.14.3",
     "deepeval>=3.8.8",
     "duckdb>=1.4.4",
@@ -20,5 +21,6 @@ dependencies = [
     "python-dotenv>=1.2.1",
     "ragas>=0.4.3",
     "selectolax>=0.4.6",
+    "sqlalchemy>=2.0.47",
     "uvicorn>=0.41.0",
 ]

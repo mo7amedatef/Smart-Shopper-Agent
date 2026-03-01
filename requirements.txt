@@ -10,6 +10,10 @@ playwright
 selectolax
 beautifulsoup4
 
+#For Storing & Caching
+sqlalchemy
+aiosqlite
+
 # For AI & Agentic Orchestration
 langchain
 langchain-openai

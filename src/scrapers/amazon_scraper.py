@@ -1,17 +1,41 @@
 import asyncio
+import re
 from typing import List
 from urllib.parse import quote
 from playwright.async_api import async_playwright
 from selectolax.parser import HTMLParser
+from loguru import logger
 
 from src.scrapers.base_scraper import BaseScraper
 from src.schemas.product import ProductDetail
 
 class AmazonScraper(BaseScraper):
     """
-    Scraper implementation for Amazon Egypt using Playwright and Selectolax.
-    Inherits from BaseScraper.
+    Final Hybrid Scraper for Amazon Egypt. 
+    Handles Arabic/English titles and cleans duplicate prices.
     """
+
+    def _is_relevant(self, query: str, title: str) -> bool:
+        query_lower = query.lower()
+        title_lower = title.lower()
+        
+        # Split query into words and check if MOST of them (or their Arabic equivalents) exist
+        # For simplicity, we check if the main brand or model exists
+        keywords = query_lower.split()
+        matches = [word for word in keywords if word in title_lower]
+        
+        # Support for common Arabic brands if English fails
+        arabic_map = {"lenovo": "لينوفو", "samsung": "سامسونج", "iphone": "ايفون", "apple": "ابل"}
+        for eng, ara in arabic_map.items():
+            if eng in query_lower and ara in title_lower:
+                matches.append(eng)
+
+        # Blacklist to avoid accessories
+        negative_keywords = ["case", "cover", "protector", "screen", "glass", "جراب", "سكرينة", "كفر"]
+        if any(neg in title_lower for neg in negative_keywords):
+            return False
+
+        return len(matches) >= 1 # At least one core keyword matched
 
     async def scrape(self, product_query: str) -> List[ProductDetail]:
         results: List[ProductDetail] = []
@@ -19,70 +43,57 @@ class AmazonScraper(BaseScraper):
         search_url = f"https://www.amazon.eg/-/en/s?k={encoded_query}"
 
         async with async_playwright() as p:
-            # Launch browser (headless by default based on __init__)
             browser = await p.chromium.launch(headless=self.headless)
-            
-            # Set a realistic User-Agent to avoid immediate bot detection
             context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                viewport={"width": 1920, "height": 1080}
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
             )
-            
             page = await context.new_page()
             
             try:
-                # Go to Amazon search page and wait for the network to be mostly idle
-                await page.goto(search_url, wait_until="domcontentloaded", timeout=15000)
+                await page.goto(search_url, wait_until="domcontentloaded")
+                await asyncio.sleep(2)
                 
-                # Wait for the main search results container to appear
-                await page.wait_for_selector('div.s-main-slot', timeout=10000)
-                
-                # Extract the HTML content
                 html_content = await page.content()
-                
-                # Parse with Selectolax for high performance
                 tree = HTMLParser(html_content)
-                
-                # Find all product containers
-                # Amazon frequently changes classes, but 's-result-item' is relatively stable
-                items = tree.css('div[data-component-type="s-search-result"]')
+                items = tree.css('div[data-asin]')
                 
                 for item in items:
-                    # Title
-                    title_node = item.css_first('h2 a span')
-                    if not title_node:
+                    asin = item.attributes.get('data-asin')
+                    if not asin: continue
+
+                    # Better Title Extraction
+                    title_node = item.css_first('h2')
+                    title = title_node.text(strip=True) if title_node else "No Title"
+                    
+                    if not self._is_relevant(product_query, title):
                         continue
-                    title = title_node.text(strip=True)
-                    
-                    # Price (Amazon splits whole and fraction)
-                    price_node = item.css_first('span.a-price-whole')
-                    price_text = price_node.text(strip=True) if price_node else "0"
-                    price_value = self.clean_price(price_text)
-                    
-                    # URL
-                    link_node = item.css_first('h2 a')
-                    url_suffix = link_node.attributes.get('href', '') if link_node else ""
-                    full_url = f"https://www.amazon.eg{url_suffix}" if url_suffix.startswith('/') else url_suffix
-                    
-                    # Skip items without a valid price (like sponsored ads missing price tags)
-                    if price_value <= 0:
-                        continue
+
+                    # Clean Price Extraction (Regex to find the first numeric price)
+                    price_node = item.css_first('.a-price-whole') or item.css_first('.a-price')
+                    if price_node:
+                        raw_price = price_node.text(strip=True)
+                        # Extract only numbers and dots
+                        clean_p = re.sub(r'[^\d.]', '', raw_price.split('.')[0])
+                        price_value = float(clean_p) if clean_p else 0
+                    else:
+                        price_value = 0
+
+                    if price_value > 0:
+                        # Construct URL
+                        full_url = f"https://www.amazon.eg/dp/{asin}"
                         
-                    product = ProductDetail(
-                        source_website="Amazon Egypt",
-                        product_name=title,
-                        price=price_value,
-                        url=full_url,
-                        is_available=True
-                    )
-                    results.append(product)
+                        results.append(ProductDetail(
+                            source_website="Amazon Egypt",
+                            product_name=title,
+                            price=price_value,
+                            url=full_url,
+                            is_available=True
+                        ))
                     
-                    # Limit to top 5 results to save processing time later
-                    if len(results) >= 5:
-                        break
+                    if len(results) >= 5: break
 
             except Exception as e:
-                print(f"[AmazonScraper] Error occurred: {e}")
+                logger.error(f"Scrape Error: {e}")
             finally:
                 await browser.close()
                 
