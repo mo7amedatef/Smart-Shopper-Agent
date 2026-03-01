@@ -3,23 +3,24 @@ import sys
 import os
 from loguru import logger
 
+# Add project root to python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.scrapers.amazon_scraper import AmazonScraper
-from src.scrapers.amazon_spec_scraper import AmazonSpecScraper
-from src.database.db_manager import DatabaseManager 
+from src.scrapers.btech_scraper import BtechScraper
+from src.scrapers.btech_spec_scraper import BtechSpecScraper
+from src.database.db_manager import DatabaseManager
 
 async def main():
-    logger.info("Starting Full Amazon Integration Flow with Database...")
+    logger.info("Starting Full B.TECH Integration Flow with Database...")
     
     # Initialize Tools and DB
-    search_tool = AmazonScraper(headless=True)
-    spec_tool = AmazonSpecScraper(headless=True)
-    db = DatabaseManager() # <--- Init DB
-    await db.init_db()     # <--- Create tables
+    search_tool = BtechScraper(headless=True)
+    spec_tool = BtechSpecScraper(headless=True)
+    db = DatabaseManager() 
+    await db.init_db()     
     
     search_query = "Lenovo IdeaPad"
-    logger.info(f"Step 1: Searching for '{search_query}'...")
+    logger.info(f"Step 1: Searching for '{search_query}' on B.TECH...")
     
     search_results = await search_tool.scrape(search_query)
     
@@ -36,11 +37,13 @@ async def main():
     if deep_specs:
         top_product.specifications.update(deep_specs)
         logger.success("Specifications merged successfully!")
+    else:
+        logger.warning("No specs found, but continuing with basic data...")
         
     # --- Step 3: Saving to Database ---
-    logger.info("Step 3: Saving enriched data to the Database...")
+    logger.info("Step 3: Saving enriched B.TECH data to the Database...")
     await db.upsert_product(top_product)
-    logger.success("Data securely stored in ecommerce_data.db! 🎉")
+    logger.success("B.TECH Data securely stored in ecommerce_data.db! 🎉")
 
 if __name__ == "__main__":
     asyncio.run(main())
