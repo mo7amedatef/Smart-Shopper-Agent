@@ -24,6 +24,11 @@ pandas
 duckdb
 loguru
 
+# For Agentic
+langgraph
+langchain-groq 
+python-dotenv
+
 # For Evaluation (The Engine Check)
 ragas
 deepeval
