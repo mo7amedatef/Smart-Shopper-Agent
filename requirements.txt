@@ -32,3 +32,6 @@ python-dotenv
 # For Evaluation (The Engine Check)
 ragas
 deepeval
+
+# For UI
+chainlit
