@@ -1,100 +1,83 @@
 import asyncio
 import re
-from typing import List
-from urllib.parse import quote
 from playwright.async_api import async_playwright
-from selectolax.parser import HTMLParser
+from pydantic import BaseModel, HttpUrl
 from loguru import logger
 
-from src.scrapers.base_scraper import BaseScraper
-from src.schemas.product import ProductDetail
+class Product(BaseModel):
+    product_name: str
+    price: float
+    url: HttpUrl
 
-class AmazonScraper(BaseScraper):
-    """
-    Final Hybrid Scraper for Amazon Egypt. 
-    Handles Arabic/English titles and cleans duplicate prices.
-    """
+class AmazonScraper:
+    def __init__(self, headless: bool = True):
+        self.headless = headless
 
-    def _is_relevant(self, query: str, title: str) -> bool:
-        query_lower = query.lower()
-        title_lower = title.lower()
-        
-        # Split query into words and check if MOST of them (or their Arabic equivalents) exist
-        # For simplicity, we check if the main brand or model exists
-        keywords = query_lower.split()
-        matches = [word for word in keywords if word in title_lower]
-        
-        # Support for common Arabic brands if English fails
-        arabic_map = {"lenovo": "لينوفو", "samsung": "سامسونج", "iphone": "ايفون", "apple": "ابل"}
-        for eng, ara in arabic_map.items():
-            if eng in query_lower and ara in title_lower:
-                matches.append(eng)
-
-        # Blacklist to avoid accessories
-        negative_keywords = ["case", "cover", "protector", "screen", "glass", "جراب", "سكرينة", "كفر"]
-        if any(neg in title_lower for neg in negative_keywords):
-            return False
-
-        return len(matches) >= 1 # At least one core keyword matched
-
-    async def scrape(self, product_query: str) -> List[ProductDetail]:
-        results: List[ProductDetail] = []
-        encoded_query = quote(product_query)
-        search_url = f"https://www.amazon.eg/-/en/s?k={encoded_query}"
-
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=self.headless)
-            context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-            )
-            page = await context.new_page()
-            
-            try:
-                await page.goto(search_url, wait_until="domcontentloaded")
-                await asyncio.sleep(2)
+    async def scrape(self, query: str):
+        logger.info(f"[AmazonScraper] Searching for '{query}'...")
+        products = []
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=self.headless)
+                context = await browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                )
+                page = await context.new_page()
                 
-                html_content = await page.content()
-                tree = HTMLParser(html_content)
-                items = tree.css('div[data-asin]')
+                search_url = f"https://www.amazon.eg/s?k={query.replace(' ', '+')}"
+                await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
                 
-                for item in items:
-                    asin = item.attributes.get('data-asin')
-                    if not asin: continue
-
-                    # Better Title Extraction
-                    title_node = item.css_first('h2')
-                    title = title_node.text(strip=True) if title_node else "No Title"
+                try:
+                    await page.wait_for_selector("div[data-component-type='s-search-result']", timeout=10000)
+                except:
+                    logger.warning("[AmazonScraper] Blocked or no results.")
+                    await browser.close()
+                    return products
                     
-                    if not self._is_relevant(product_query, title):
-                        continue
-
-                    # Clean Price Extraction (Regex to find the first numeric price)
-                    price_node = item.css_first('.a-price-whole') or item.css_first('.a-price')
-                    if price_node:
-                        raw_price = price_node.text(strip=True)
-                        # Extract only numbers and dots
-                        clean_p = re.sub(r'[^\d.]', '', raw_price.split('.')[0])
-                        price_value = float(clean_p) if clean_p else 0
-                    else:
-                        price_value = 0
-
-                    if price_value > 0:
-                        # Construct URL
-                        full_url = f"https://www.amazon.eg/dp/{asin}"
+                items = await page.query_selector_all("div[data-component-type='s-search-result']")
+                
+                # Increased to 8 to ensure we catch valid non-sponsored products
+                for item in items[:8]: 
+                    try:
+                        # 1. Ultra-resilient Title extraction (Just look for the h2 tag)
+                        title_el = await item.query_selector("h2")
+                        if not title_el:
+                            continue
+                        full_title = await title_el.inner_text()
                         
-                        results.append(ProductDetail(
-                            source_website="Amazon Egypt",
-                            product_name=title,
-                            price=price_value,
-                            url=full_url,
-                            is_available=True
+                        # 2. Resilient Price extraction
+                        price_el = await item.query_selector(".a-price-whole")
+                        if not price_el:
+                            continue
+                        price_text = await price_el.inner_text()
+                        
+                        clean_price = re.sub(r'[^\d.]', '', price_text)
+                        if not clean_price or clean_price == '.':
+                            continue
+                        price = float(clean_price)
+                        
+                        # 3. Resilient Link extraction (Fallback added)
+                        link_el = await item.query_selector("h2 a")
+                        if not link_el:
+                            link_el = await item.query_selector("a.a-link-normal")
+                            
+                        if not link_el:
+                            continue
+                            
+                        link_href = await link_el.get_attribute("href")
+                        full_url = link_href if link_href.startswith("http") else f"https://www.amazon.eg{link_href}"
+                        
+                        products.append(Product(
+                            product_name=full_title.strip(),
+                            price=price,
+                            url=full_url
                         ))
-                    
-                    if len(results) >= 5: break
-
-            except Exception as e:
-                logger.error(f"Scrape Error: {e}")
-            finally:
+                    except Exception as e:
+                        continue
+                        
                 await browser.close()
-                
-        return results
+                logger.success(f"[AmazonScraper] Successfully scraped {len(products)} products with full specs!")
+                return products
+        except Exception as e:
+            logger.error(f"[AmazonScraper] Error: {e}")
+            return e

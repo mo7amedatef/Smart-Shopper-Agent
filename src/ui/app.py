@@ -1,5 +1,7 @@
 import sys
 import os
+
+# Go up 3 levels to reach the project root
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.append(PROJECT_ROOT)
 
@@ -13,20 +15,15 @@ from src.agent.graph import build_graph
 
 @cl.on_chat_start
 async def on_chat_start():
-    """
-    Initializes the agent session when a user opens the chat.
-    """
+    """Initializes the agent session."""
     logger.info("New chat session started in UI.")
     
-    # Initialize the LangGraph app
     agent_app = build_graph()
     cl.user_session.set("agent_app", agent_app)
     
-    # Create a unique thread ID for memory persistence per user session
     thread_id = str(uuid.uuid4())
     cl.user_session.set("config", {"configurable": {"thread_id": thread_id}})
     
-    # Send a welcoming message
     await cl.Message(
         content="Welcome to Egy-Shop! 🛒 I'm your smart shopping assistant. What are you looking to buy today?",
         author="Assistant"
@@ -34,41 +31,51 @@ async def on_chat_start():
 
 @cl.on_message
 async def on_message(message: cl.Message):
-    """
-    Handles incoming messages and streams the Agent's response.
-    """
+    """Handles incoming messages with Token-by-Token streaming and Tool state handling."""
     agent_app = cl.user_session.get("agent_app")
     config = cl.user_session.get("config")
     
     state_input = {"messages": [HumanMessage(content=message.content)]}
     
-    # Create an empty message for the final LLM response
+    # Create an empty message for the AI response
     ui_msg = cl.Message(content="", author="Assistant")
     await ui_msg.send()
     
-    tool_msg = None 
+    tool_msg = None
     
-    # Stream events from LangGraph
-    async for event in agent_app.astream(state_input, config=config):
-        for node_name, value in event.items():
+    try:
+        # Using astream_events for granular control (Token-by-Token)
+        async for event in agent_app.astream_events(state_input, config=config, version="v2"):
+            kind = event["event"]
             
-            if node_name == "chat":
-                last_msg = value["messages"][-1]
-                
-                # Check if the LLM decided to use a tool!
-                if hasattr(last_msg, 'tool_calls') and last_msg.tool_calls:
+            # 1. STREAMING TOKEN BY TOKEN ✨
+            if kind == "on_chat_model_stream":
+                chunk = event["data"]["chunk"]
+                # Append each token dynamically to the UI
+                if chunk.content and isinstance(chunk.content, str):
+                    await ui_msg.stream_token(chunk.content)
+            
+            # 2. TOOL STARTED ⏳
+            elif kind == "on_tool_start":
+                tool_name = event["name"]
+                if tool_name == "search_ecommerce_sites":
                     tool_msg = cl.Message(
                         content="⏳ **Searching Amazon, B.TECH, and Noon live... Please wait a few seconds!**", 
                         author="System"
                     )
                     await tool_msg.send()
                     
-                # If it's a normal text response to the user
-                elif last_msg.content:
-                  
-                    if tool_msg:
-                        await tool_msg.remove()
-                        tool_msg = None
-                        
-                    ui_msg.content = last_msg.content
-                    await ui_msg.update()
+            # 3. TOOL FINISHED ✅
+            elif kind == "on_tool_end":
+                if tool_msg:
+                    await tool_msg.remove()
+                    tool_msg = None
+        
+        # Finalize the streaming message
+        await ui_msg.update()
+        
+    except Exception as e:
+        logger.error(f"Error during execution: {e}")
+        if tool_msg:
+            await tool_msg.remove()
+        await cl.Message(content=f"⚠️ System encountered an issue: {str(e)}", author="System").send()
